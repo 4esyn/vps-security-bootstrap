@@ -7,6 +7,9 @@ SCRIPT_VERSION="0.1.0"
 SCRIPT_NAME="vps-security-bootstrap"
 STATE_DIR="/var/lib/vps-security-bootstrap"
 STATE_FILE="${STATE_DIR}/state.env"
+SSH_MAIN_CONFIG="/etc/ssh/sshd_config"
+SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
+SSH_DROPIN_FILE="${SSH_DROPIN_DIR}/99-vps-security-bootstrap.conf"
 LANGUAGE="en"
 DRY_RUN=0
 SUDO_BIN=""
@@ -97,8 +100,8 @@ txt() {
     en:user_sudo_failed) echo "Failed to grant sudo access to that user." ;;
     en:ssh_section) echo "SSH hardening" ;;
     en:ssh_prompt) echo "Configure SSH security settings?" ;;
-    en:ssh_port_prompt) echo "Enter the SSH port" ;;
-    en:ssh_port_invalid) echo "Invalid port. Falling back to 22." ;;
+    en:ssh_port_prompt) echo "Enter the SSH port (1024-65535)" ;;
+    en:ssh_port_invalid) echo "Invalid port. Use a value from 1024 to 65535. Falling back to 22." ;;
     en:ssh_change_port) echo "Use a custom SSH port instead of 22?" ;;
     en:ssh_auth_choice) echo "Choose SSH authentication mode:" ;;
     en:ssh_auth_keys) echo "Public key only (recommended)" ;;
@@ -108,6 +111,8 @@ txt() {
     en:ssh_target_prompt) echo "Enter the existing non-root user that should receive SSH access" ;;
     en:ssh_target_missing) echo "That user does not exist. SSH configuration will be skipped for now." ;;
     en:ssh_backup_done) echo "SSH config backup created." ;;
+    en:ssh_dropin_written) echo "SSH settings were written to /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf. The main /etc/ssh/sshd_config file remains unchanged." ;;
+    en:ssh_include_added) echo "Added Include directive to /etc/ssh/sshd_config so drop-in SSH settings are loaded." ;;
     en:ssh_validate) echo "Validating SSH configuration..." ;;
     en:ssh_invalid) echo "SSH validation failed. The new config was not applied." ;;
     en:ssh_restarted) echo "SSH service restarted successfully." ;;
@@ -121,6 +126,9 @@ txt() {
     en:fail2ban_section) echo "Fail2Ban" ;;
     en:fail2ban_prompt) echo "Install and configure Fail2Ban?" ;;
     en:fail2ban_done) echo "Fail2Ban is installed and configured." ;;
+    en:fail2ban_invalid) echo "Fail2Ban configuration check failed. The new config was not applied cleanly." ;;
+    en:fail2ban_validate) echo "Validating Fail2Ban configuration..." ;;
+    en:fail2ban_status) echo "Checking Fail2Ban SSH jail status..." ;;
     en:reboot_section) echo "Reboot" ;;
     en:reboot_needed) echo "A reboot is recommended because the system reports pending restart-required changes." ;;
     en:reboot_prompt) echo "Reboot now?" ;;
@@ -143,6 +151,7 @@ txt() {
     en:summary_enabled) echo "enabled" ;;
     en:summary_disabled) echo "disabled / unchanged" ;;
     en:summary_command) echo "Next SSH command" ;;
+    en:summary_ssh_config) echo "SSH config file" ;;
     en:summary_test) echo "Open a new terminal and verify SSH access before closing the current session." ;;
     en:summary_finish) echo "Setup finished." ;;
     en:confirm_yes_default) echo "[Y/n]" ;;
@@ -184,8 +193,8 @@ txt() {
     ru:user_sudo_failed) echo "Не удалось выдать этому пользователю права sudo." ;;
     ru:ssh_section) echo "Защита SSH" ;;
     ru:ssh_prompt) echo "Настроить параметры безопасности SSH?" ;;
-    ru:ssh_port_prompt) echo "Введите порт SSH" ;;
-    ru:ssh_port_invalid) echo "Некорректный порт. Будет использован 22." ;;
+    ru:ssh_port_prompt) echo "Введите порт SSH (1024-65535)" ;;
+    ru:ssh_port_invalid) echo "Некорректный порт. Используйте значение от 1024 до 65535. Будет использован 22." ;;
     ru:ssh_change_port) echo "Использовать нестандартный SSH-порт вместо 22?" ;;
     ru:ssh_auth_choice) echo "Выберите режим аутентификации SSH:" ;;
     ru:ssh_auth_keys) echo "Только публичный ключ (рекомендуется)" ;;
@@ -195,6 +204,8 @@ txt() {
     ru:ssh_target_prompt) echo "Введите существующего пользователя без root, которому нужен SSH-доступ" ;;
     ru:ssh_target_missing) echo "Такой пользователь не существует. Настройка SSH пока будет пропущена." ;;
     ru:ssh_backup_done) echo "Создана резервная копия SSH-конфига." ;;
+    ru:ssh_dropin_written) echo "SSH-настройки записаны в /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf. Основной файл /etc/ssh/sshd_config при этом не меняется." ;;
+    ru:ssh_include_added) echo "В /etc/ssh/sshd_config добавлена директива Include, чтобы drop-in SSH-настройки точно загружались." ;;
     ru:ssh_validate) echo "Проверяю SSH-конфиг..." ;;
     ru:ssh_invalid) echo "Проверка SSH не прошла. Новый конфиг не применен." ;;
     ru:ssh_restarted) echo "Сервис SSH успешно перезапущен." ;;
@@ -208,6 +219,9 @@ txt() {
     ru:fail2ban_section) echo "Fail2Ban" ;;
     ru:fail2ban_prompt) echo "Установить и настроить Fail2Ban?" ;;
     ru:fail2ban_done) echo "Fail2Ban установлен и настроен." ;;
+    ru:fail2ban_invalid) echo "Проверка конфигурации Fail2Ban не прошла. Новый конфиг применить корректно не удалось." ;;
+    ru:fail2ban_validate) echo "Проверяю конфигурацию Fail2Ban..." ;;
+    ru:fail2ban_status) echo "Проверяю статус SSH-джейла Fail2Ban..." ;;
     ru:reboot_section) echo "Перезагрузка" ;;
     ru:reboot_needed) echo "Рекомендуется перезагрузка: система сообщает о необходимости рестарта." ;;
     ru:reboot_prompt) echo "Перезагрузить сервер сейчас?" ;;
@@ -230,6 +244,7 @@ txt() {
     ru:summary_enabled) echo "включено" ;;
     ru:summary_disabled) echo "выключено / без изменений" ;;
     ru:summary_command) echo "Команда для нового SSH-подключения" ;;
+    ru:summary_ssh_config) echo "Файл SSH-конфига" ;;
     ru:summary_test) echo "Откройте новый терминал и проверьте вход по SSH, прежде чем закрывать текущую сессию." ;;
     ru:summary_finish) echo "Настройка завершена." ;;
     ru:confirm_yes_default) echo "[Y/n]" ;;
@@ -524,7 +539,7 @@ pick_existing_target_user_if_needed() {
 
 validate_port() {
   local port="$1"
-  if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+  if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 )); then
     printf "%s" "$port"
   else
     msg warn "!" "$(txt ssh_port_invalid)"
@@ -578,6 +593,27 @@ clear_resume_state() {
   if [[ -e "$STATE_FILE" ]]; then
     run_root_cmd rm -f "$STATE_FILE"
   fi
+}
+
+ensure_ssh_include() {
+  local include_line="Include ${SSH_DROPIN_DIR}/*.conf"
+
+  if grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf([[:space:]]+.*)?$' "$SSH_MAIN_CONFIG"; then
+    return 0
+  fi
+
+  backup_file "$SSH_MAIN_CONFIG"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "append '$include_line' to $SSH_MAIN_CONFIG"
+    return 0
+  fi
+
+  if [[ -n "$SUDO_BIN" ]]; then
+    printf "\n%s\n" "$include_line" | "$SUDO_BIN" tee -a "$SSH_MAIN_CONFIG" >/dev/null
+  else
+    printf "\n%s\n" "$include_line" >>"$SSH_MAIN_CONFIG"
+  fi
+  msg success "+" "$(txt ssh_include_added)"
 }
 
 load_resume_state() {
@@ -698,7 +734,6 @@ configure_ssh() {
     fi
   fi
 
-  local ssh_dropin="/etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf"
   local ssh_content
   ssh_content=$(
     cat <<EOF
@@ -713,9 +748,12 @@ UsePAM yes
 EOF
   )
 
-  backup_file "$ssh_dropin"
-  write_file_as_root "$ssh_dropin" "$ssh_content"
+  run_root_cmd install -d -m 755 "$SSH_DROPIN_DIR"
+  ensure_ssh_include
+  backup_file "$SSH_DROPIN_FILE"
+  write_file_as_root "$SSH_DROPIN_FILE" "$ssh_content"
   msg success "+" "$(txt ssh_backup_done)"
+  msg info "i" "$(txt ssh_dropin_written)"
 
   msg info "i" "$(txt ssh_validate)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -751,6 +789,7 @@ configure_ufw() {
   run_root_cmd ufw default deny incoming
   run_root_cmd ufw default allow outgoing
   run_root_cmd ufw allow "${SSH_PORT}/tcp" comment "SSH"
+  run_root_cmd ufw allow 443/tcp comment "HTTPS"
 
   if [[ "$SSH_PORT" != "22" ]] && confirm "$(txt ufw_remove_old)" "no"; then
     REMOVE_OLD_SSH_RULE=1
@@ -791,17 +830,54 @@ bantime = 2h
 findtime = 30m
 maxretry = 4
 backend = systemd
+usedns = no
 
 [sshd]
 enabled = true
+filter = sshd
+mode = normal
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
 port = $SSH_PORT
 EOF
   )
 
   backup_file "$jail_local"
   write_file_as_root "$jail_local" "$jail_content"
+  msg info "i" "$(txt fail2ban_validate)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "fail2ban-client -d"
+  else
+    if [[ -n "$SUDO_BIN" ]]; then
+      if ! "$SUDO_BIN" fail2ban-client -d >/dev/null; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    else
+      if ! fail2ban-client -d >/dev/null; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    fi
+  fi
   run_root_cmd systemctl enable --now fail2ban
   run_root_cmd systemctl restart fail2ban
+  msg info "i" "$(txt fail2ban_status)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "fail2ban-client status sshd"
+  else
+    if [[ -n "$SUDO_BIN" ]]; then
+      if ! "$SUDO_BIN" fail2ban-client status sshd; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    else
+      if ! fail2ban-client status sshd; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    fi
+  fi
   FAIL2BAN_ENABLED=1
   msg success "+" "$(txt fail2ban_done)"
 }
@@ -850,6 +926,9 @@ print_summary() {
   fi
   printf "%s: %s\n" "$(txt summary_ufw)" "$(bool_label "$UFW_ENABLED")"
   printf "%s: %s\n" "$(txt summary_fail2ban)" "$(bool_label "$FAIL2BAN_ENABLED")"
+  if [[ "$SSH_CONFIGURED" -eq 1 ]]; then
+    printf "%s: %s\n" "$(txt summary_ssh_config)" "$SSH_DROPIN_FILE"
+  fi
   printf "%s: ssh -p %s %s@YOUR_SERVER_IP\n" "$(txt summary_command)" "$SSH_PORT" "${TARGET_USER:-${CURRENT_USER}}"
   printf "%s\n" "$(txt summary_test)"
   msg success "+" "$(txt summary_finish)"
