@@ -92,6 +92,9 @@ txt() {
     en:user_created) echo "User created and added to sudo group." ;;
     en:user_sudo_ensured) echo "Sudo group membership confirmed." ;;
     en:user_missing_warn) echo "No non-root admin user is set. SSH hardening options will be limited." ;;
+    en:user_name_invalid) echo "Invalid username. Use lowercase letters, digits, underscores, or hyphens, and start with a letter or underscore." ;;
+    en:user_create_failed) echo "User creation failed. Please try another username or fix the issue and retry." ;;
+    en:user_sudo_failed) echo "Failed to grant sudo access to that user." ;;
     en:ssh_section) echo "SSH hardening" ;;
     en:ssh_prompt) echo "Configure SSH security settings?" ;;
     en:ssh_port_prompt) echo "Enter the SSH port" ;;
@@ -176,6 +179,9 @@ txt() {
     ru:user_created) echo "Пользователь создан и добавлен в группу sudo." ;;
     ru:user_sudo_ensured) echo "Права sudo подтверждены." ;;
     ru:user_missing_warn) echo "Не задан админ-пользователь без root. Возможности безопасной настройки SSH будут ограничены." ;;
+    ru:user_name_invalid) echo "Некорректное имя пользователя. Используйте строчные буквы, цифры, подчеркивание или дефис; имя должно начинаться с буквы или подчеркивания." ;;
+    ru:user_create_failed) echo "Не удалось создать пользователя. Попробуйте другое имя или исправьте проблему и повторите попытку." ;;
+    ru:user_sudo_failed) echo "Не удалось выдать этому пользователю права sudo." ;;
     ru:ssh_section) echo "Защита SSH" ;;
     ru:ssh_prompt) echo "Настроить параметры безопасности SSH?" ;;
     ru:ssh_port_prompt) echo "Введите порт SSH" ;;
@@ -444,35 +450,57 @@ maybe_change_root_password() {
   fi
 }
 
+validate_username() {
+  local user_name="$1"
+  [[ "$user_name" =~ ^[a-z_][a-z0-9_-]*\$?$ ]]
+}
+
 setup_admin_user() {
   print_title "$(txt user_section)"
   if ! confirm "$(txt user_create_prompt)" "yes"; then
     return 0
   fi
 
-  local user_name
-  user_name="$(prompt_input "$(txt user_name_prompt)")"
+  local user_name=""
 
-  if [[ -z "$user_name" ]]; then
-    msg warn "!" "$(txt user_missing_warn)"
-    return 0
-  fi
+  while true; do
+    user_name="$(prompt_input "$(txt user_name_prompt)")"
 
-  TARGET_USER="$user_name"
-
-  if id "$TARGET_USER" >/dev/null 2>&1; then
-    msg warn "!" "$(txt user_exists)"
-  else
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-      msg warn "$(txt skip_dry_run)" "adduser $TARGET_USER"
-    else
-      run_root_cmd adduser "$TARGET_USER"
+    if [[ -z "$user_name" ]]; then
+      msg warn "!" "$(txt user_missing_warn)"
+      return 0
     fi
-    msg success "+" "$(txt user_created)"
-  fi
 
-  run_root_cmd usermod -aG sudo "$TARGET_USER"
-  msg success "+" "$(txt user_sudo_ensured)"
+    TARGET_USER="$user_name"
+
+    if id "$TARGET_USER" >/dev/null 2>&1; then
+      msg warn "!" "$(txt user_exists)"
+    else
+      if ! validate_username "$TARGET_USER"; then
+        msg warn "!" "$(txt user_name_invalid)"
+        continue
+      fi
+
+      if [[ "$DRY_RUN" -eq 1 ]]; then
+        msg warn "$(txt skip_dry_run)" "adduser $TARGET_USER"
+      else
+        if ! run_root_cmd adduser "$TARGET_USER"; then
+          msg error "!" "$(txt user_create_failed)"
+          TARGET_USER=""
+          continue
+        fi
+      fi
+      msg success "+" "$(txt user_created)"
+    fi
+
+    if run_root_cmd usermod -aG sudo "$TARGET_USER"; then
+      msg success "+" "$(txt user_sudo_ensured)"
+      return 0
+    fi
+
+    msg error "!" "$(txt user_sudo_failed)"
+    TARGET_USER=""
+  done
 }
 
 pick_existing_target_user_if_needed() {
