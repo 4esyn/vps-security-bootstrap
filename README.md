@@ -2,9 +2,34 @@
 
 [Русская версия README](./README.ru.md)
 
-`vps-security-bootstrap` is an interactive Bash script for the first security pass on a fresh VPS. Version `v1` targets `Ubuntu 24.04 LTS`, while the repository structure is intentionally generic so other operating systems can be added later.
+A simple interactive Bash script for basic VPS security setup.
 
-The script starts with a language selector (`English / Русский`) and then walks the operator through system updates, sudo user creation, SSH hardening, UFW firewall setup, and optional Fail2Ban installation.
+Right now this script is made for Ubuntu 24.04 LTS.
+
+It starts with a language choice (`English / Русский`) and then helps with updates, sudo user setup, SSH hardening, UFW, and optional Fail2Ban installation.
+
+## What it can do
+
+- update the system
+- help create a sudo user
+- configure SSH
+- change the SSH port
+- set up UFW
+- install and configure Fail2Ban
+- show a final summary with the SSH command you should test
+
+## Quick start
+
+```bash
+chmod +x setup-vps-security.sh
+./setup-vps-security.sh
+```
+
+## Dry run
+
+```bash
+./setup-vps-security.sh --dry-run
+```
 
 ## What the script does
 
@@ -25,39 +50,6 @@ The script starts with a language selector (`English / Русский`) and then
 - Writes Fail2Ban settings to `/etc/fail2ban/jail.local`.
 - Creates timestamped backups before overwriting known config files.
 - Creates `~/.ssh/authorized_keys` for the selected admin user when key-based SSH is chosen.
-
-## Quick start
-
-Connect to your fresh VPS and run the script with a single pasted command:
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh)
-```
-
-You can preview the workflow without making changes:
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh) --dry-run
-```
-
-This quick start assumes `bash` and `curl` are available on the server, which is a reasonable default for Ubuntu 24.04 VPS images.
-
-If the script updates the system, asks for a reboot, and you reboot the server, run the same command again after reconnecting. The script will detect the saved state and offer to continue from the step after system update.
-
-## Run from a local copy
-
-If you already cloned the repository or copied the script to the server, run:
-
-```bash
-chmod +x setup-vps-security.sh
-./setup-vps-security.sh
-```
-
-Dry-run from a local copy:
-
-```bash
-./setup-vps-security.sh --dry-run
-```
 
 ## Questions the script asks
 
