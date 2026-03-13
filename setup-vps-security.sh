@@ -781,6 +781,7 @@ configure_ssh() {
   set_sshd_option "$SSH_MAIN_CONFIG" "ChallengeResponseAuthentication" "no"
   set_sshd_option "$SSH_MAIN_CONFIG" "UsePAM" "yes"
   msg success "+" "$(txt ssh_backup_done)"
+  msg info "i" "$(txt ssh_dropin_written)"
 
   run_root_cmd install -d -m 755 "$SSH_DROPIN_DIR"
   if [[ -f "$SSH_CLOUD_INIT_FILE" || "$DRY_RUN" -eq 1 ]]; then
