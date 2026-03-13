@@ -57,7 +57,7 @@ Dry-run from a local copy:
 - Detects whether a reboot is recommended and asks before restarting the server.
 - Optionally changes the `root` password when launched with root access.
 - Creates or reuses a non-root admin user and ensures sudo access.
-- Configures SSH using a dedicated drop-in file in `/etc/ssh/sshd_config.d/`.
+- Configures SSH directly in `/etc/ssh/sshd_config` and syncs password auth in `/etc/ssh/sshd_config.d/50-cloud-init.conf` when present.
 - Supports either key-only SSH access or keeping password authentication enabled.
 - Configures UFW with a safe order for SSH port changes.
 - Installs and configures Fail2Ban with a local config file.
@@ -66,7 +66,7 @@ Dry-run from a local copy:
 ## What the script changes
 
 - Installs packages when needed: `openssh-server`, `ufw`, `fail2ban`.
-- Writes SSH settings to `/etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf`.
+- Writes SSH settings to `/etc/ssh/sshd_config`.
 - Writes Fail2Ban settings to `/etc/fail2ban/jail.local`.
 - Creates timestamped backups before overwriting known config files.
 - Creates `~/.ssh/authorized_keys` for the selected admin user when key-based SSH is chosen.

@@ -10,6 +10,7 @@ STATE_FILE="${STATE_DIR}/state.env"
 SSH_MAIN_CONFIG="/etc/ssh/sshd_config"
 SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSH_DROPIN_FILE="${SSH_DROPIN_DIR}/99-vps-security-bootstrap.conf"
+SSH_CLOUD_INIT_FILE="${SSH_DROPIN_DIR}/50-cloud-init.conf"
 LANGUAGE="en"
 DRY_RUN=0
 SUDO_BIN=""
@@ -111,8 +112,9 @@ txt() {
     en:ssh_target_prompt) echo "Enter the existing non-root user that should receive SSH access" ;;
     en:ssh_target_missing) echo "That user does not exist. SSH configuration will be skipped for now." ;;
     en:ssh_backup_done) echo "SSH config backup created." ;;
-    en:ssh_dropin_written) echo "SSH settings were written to /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf. The main /etc/ssh/sshd_config file remains unchanged." ;;
-    en:ssh_include_added) echo "Added Include directive to /etc/ssh/sshd_config so drop-in SSH settings are loaded." ;;
+    en:ssh_main_written) echo "SSH settings were written directly to /etc/ssh/sshd_config." ;;
+    en:ssh_cloud_init_updated) echo "Updated /etc/ssh/sshd_config.d/50-cloud-init.conf to keep PasswordAuthentication in sync." ;;
+    en:ssh_dropin_removed) echo "Removed the old /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf override to avoid conflicts." ;;
     en:ssh_validate) echo "Validating SSH configuration..." ;;
     en:ssh_invalid) echo "SSH validation failed. The new config was not applied." ;;
     en:ssh_restarted) echo "SSH service restarted successfully." ;;
@@ -204,8 +206,9 @@ txt() {
     ru:ssh_target_prompt) echo "Введите существующего пользователя без root, которому нужен SSH-доступ" ;;
     ru:ssh_target_missing) echo "Такой пользователь не существует. Настройка SSH пока будет пропущена." ;;
     ru:ssh_backup_done) echo "Создана резервная копия SSH-конфига." ;;
-    ru:ssh_dropin_written) echo "SSH-настройки записаны в /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf. Основной файл /etc/ssh/sshd_config при этом не меняется." ;;
-    ru:ssh_include_added) echo "В /etc/ssh/sshd_config добавлена директива Include, чтобы drop-in SSH-настройки точно загружались." ;;
+    ru:ssh_main_written) echo "SSH-настройки записаны напрямую в /etc/ssh/sshd_config." ;;
+    ru:ssh_cloud_init_updated) echo "Файл /etc/ssh/sshd_config.d/50-cloud-init.conf обновлен, чтобы PasswordAuthentication не расходился с основной настройкой." ;;
+    ru:ssh_dropin_removed) echo "Старый override-файл /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf удален, чтобы избежать конфликтов." ;;
     ru:ssh_validate) echo "Проверяю SSH-конфиг..." ;;
     ru:ssh_invalid) echo "Проверка SSH не прошла. Новый конфиг не применен." ;;
     ru:ssh_restarted) echo "Сервис SSH успешно перезапущен." ;;
@@ -595,25 +598,59 @@ clear_resume_state() {
   fi
 }
 
-ensure_ssh_include() {
-  local include_line="Include ${SSH_DROPIN_DIR}/*.conf"
+wait_for_fail2ban() {
+  local attempt=1
 
-  if grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf([[:space:]]+.*)?$' "$SSH_MAIN_CONFIG"; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
 
-  backup_file "$SSH_MAIN_CONFIG"
+  while (( attempt <= 5 )); do
+    if [[ -n "$SUDO_BIN" ]]; then
+      if "$SUDO_BIN" fail2ban-client ping >/dev/null 2>&1; then
+        return 0
+      fi
+    else
+      if fail2ban-client ping >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
+set_sshd_option() {
+  local file_path="$1"
+  local option_name="$2"
+  local option_value="$3"
+  local escaped_value=""
+  local sed_expr=""
+
+  escaped_value="$(printf '%s' "$option_value" | sed 's/[\/&]/\\&/g')"
+  sed_expr="s|^[#[:space:]]*${option_name}[[:space:]].*|${option_name} ${escaped_value}|"
+
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    msg warn "$(txt skip_dry_run)" "append '$include_line' to $SSH_MAIN_CONFIG"
+    msg warn "$(txt skip_dry_run)" "set ${option_name} ${option_value} in ${file_path}"
     return 0
   fi
 
   if [[ -n "$SUDO_BIN" ]]; then
-    printf "\n%s\n" "$include_line" | "$SUDO_BIN" tee -a "$SSH_MAIN_CONFIG" >/dev/null
+    if "$SUDO_BIN" grep -Eq "^[#[:space:]]*${option_name}[[:space:]]+" "$file_path"; then
+      "$SUDO_BIN" sed -i -E "$sed_expr" "$file_path"
+    else
+      printf "\n%s %s\n" "$option_name" "$option_value" | "$SUDO_BIN" tee -a "$file_path" >/dev/null
+    fi
   else
-    printf "\n%s\n" "$include_line" >>"$SSH_MAIN_CONFIG"
+    if grep -Eq "^[#[:space:]]*${option_name}[[:space:]]+" "$file_path"; then
+      sed -i -E "$sed_expr" "$file_path"
+    else
+      printf "\n%s %s\n" "$option_name" "$option_value" >>"$file_path"
+    fi
   fi
-  msg success "+" "$(txt ssh_include_added)"
 }
 
 load_resume_state() {
@@ -685,7 +722,7 @@ configure_ssh() {
   fi
 
   if confirm "$(txt ssh_change_port)" "no"; then
-    SSH_PORT="$(validate_port "$(prompt_input "$(txt ssh_port_prompt)" "2505")")"
+    SSH_PORT="$(validate_port "$(prompt_input "$(txt ssh_port_prompt)")")"
   else
     SSH_PORT="22"
   fi
@@ -734,26 +771,38 @@ configure_ssh() {
     fi
   fi
 
-  local ssh_content
-  ssh_content=$(
-    cat <<EOF
-Port $SSH_PORT
-PermitRootLogin no
-PubkeyAuthentication yes
-PasswordAuthentication $PASSWORD_AUTH_POLICY
-PermitEmptyPasswords no
-KbdInteractiveAuthentication no
-ChallengeResponseAuthentication no
-UsePAM yes
-EOF
-  )
-
-  run_root_cmd install -d -m 755 "$SSH_DROPIN_DIR"
-  ensure_ssh_include
-  backup_file "$SSH_DROPIN_FILE"
-  write_file_as_root "$SSH_DROPIN_FILE" "$ssh_content"
+  backup_file "$SSH_MAIN_CONFIG"
+  set_sshd_option "$SSH_MAIN_CONFIG" "Port" "$SSH_PORT"
+  set_sshd_option "$SSH_MAIN_CONFIG" "PermitRootLogin" "no"
+  set_sshd_option "$SSH_MAIN_CONFIG" "PubkeyAuthentication" "yes"
+  set_sshd_option "$SSH_MAIN_CONFIG" "PasswordAuthentication" "$PASSWORD_AUTH_POLICY"
+  set_sshd_option "$SSH_MAIN_CONFIG" "PermitEmptyPasswords" "no"
+  set_sshd_option "$SSH_MAIN_CONFIG" "KbdInteractiveAuthentication" "no"
+  set_sshd_option "$SSH_MAIN_CONFIG" "ChallengeResponseAuthentication" "no"
+  set_sshd_option "$SSH_MAIN_CONFIG" "UsePAM" "yes"
   msg success "+" "$(txt ssh_backup_done)"
   msg info "i" "$(txt ssh_dropin_written)"
+
+  run_root_cmd install -d -m 755 "$SSH_DROPIN_DIR"
+  if [[ -f "$SSH_CLOUD_INIT_FILE" || "$DRY_RUN" -eq 1 ]]; then
+    if [[ ! -f "$SSH_CLOUD_INIT_FILE" ]]; then
+      write_file_as_root "$SSH_CLOUD_INIT_FILE" ""
+    fi
+    backup_file "$SSH_CLOUD_INIT_FILE"
+    set_sshd_option "$SSH_CLOUD_INIT_FILE" "PasswordAuthentication" "$PASSWORD_AUTH_POLICY"
+    msg info "i" "$(txt ssh_cloud_init_updated)"
+  fi
+
+  if [[ -e "$SSH_DROPIN_FILE" ]]; then
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      msg warn "$(txt skip_dry_run)" "rm -f $SSH_DROPIN_FILE"
+    else
+      run_root_cmd rm -f "$SSH_DROPIN_FILE"
+    fi
+    msg info "i" "$(txt ssh_dropin_removed)"
+  fi
+
+  msg info "i" "$(txt ssh_main_written)"
 
   msg info "i" "$(txt ssh_validate)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -830,6 +879,7 @@ bantime = 2h
 findtime = 30m
 maxretry = 4
 backend = systemd
+allowipv6 = auto
 usedns = no
 
 [sshd]
@@ -866,6 +916,11 @@ EOF
   if [[ "$DRY_RUN" -eq 1 ]]; then
     msg warn "$(txt skip_dry_run)" "fail2ban-client status sshd"
   else
+    if ! wait_for_fail2ban; then
+      msg error "!" "$(txt fail2ban_invalid)"
+      return 1
+    fi
+
     if [[ -n "$SUDO_BIN" ]]; then
       if ! "$SUDO_BIN" fail2ban-client status sshd; then
         msg error "!" "$(txt fail2ban_invalid)"
@@ -927,7 +982,7 @@ print_summary() {
   printf "%s: %s\n" "$(txt summary_ufw)" "$(bool_label "$UFW_ENABLED")"
   printf "%s: %s\n" "$(txt summary_fail2ban)" "$(bool_label "$FAIL2BAN_ENABLED")"
   if [[ "$SSH_CONFIGURED" -eq 1 ]]; then
-    printf "%s: %s\n" "$(txt summary_ssh_config)" "$SSH_DROPIN_FILE"
+    printf "%s: %s\n" "$(txt summary_ssh_config)" "$SSH_MAIN_CONFIG"
   fi
   printf "%s: ssh -p %s %s@YOUR_SERVER_IP\n" "$(txt summary_command)" "$SSH_PORT" "${TARGET_USER:-${CURRENT_USER}}"
   printf "%s\n" "$(txt summary_test)"
