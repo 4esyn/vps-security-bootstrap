@@ -28,14 +28,32 @@ The script starts with a language selector (`English / Русский`) and then
 
 ## Quick start
 
-Clone or copy the script to your server, then run:
+Connect to your fresh VPS and run the script with a single pasted command:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh)
+```
+
+You can preview the workflow without making changes:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh) --dry-run
+```
+
+This quick start assumes `bash` and `curl` are available on the server, which is a reasonable default for Ubuntu 24.04 VPS images.
+
+If the script updates the system, asks for a reboot, and you reboot the server, run the same command again after reconnecting. The script will detect the saved state and offer to continue from the step after system update.
+
+## Run from a local copy
+
+If you already cloned the repository or copied the script to the server, run:
 
 ```bash
 chmod +x setup-vps-security.sh
 ./setup-vps-security.sh
 ```
 
-You can preview the workflow without making changes:
+Dry-run from a local copy:
 
 ```bash
 ./setup-vps-security.sh --dry-run
