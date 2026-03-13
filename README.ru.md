@@ -20,12 +20,34 @@
 
 ## Быстрый старт
 
+Подключитесь к новому VPS и запустите скрипт одной вставкой в терминал:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh)
+```
+
+Этот вариант подходит для чистого сервера, где файл `setup-vps-security.sh` еще не лежит в текущей директории.
+
+Быстрый старт предполагает, что на сервере доступны `bash` и `curl`. Для типового образа Ubuntu 24.04 VPS это нормальное ожидание.
+
+Если скрипт обновил систему, предложил перезагрузку и вы перезагрузили сервер, после повторного подключения просто запустите ту же команду еще раз. Скрипт обнаружит сохраненное состояние и предложит продолжить с шага после обновления системы.
+
+## Режим dry-run
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh) --dry-run
+```
+
+## Запуск из локальной копии
+
+Если вы уже скопировали репозиторий или сам файл скрипта на сервер, используйте обычный локальный запуск:
+
 ```bash
 chmod +x setup-vps-security.sh
 ./setup-vps-security.sh
 ```
 
-## Dry run
+Dry-run для локальной копии:
 
 ```bash
 ./setup-vps-security.sh --dry-run
