@@ -20,12 +20,32 @@ It starts with a language choice (`English / Русский`) and then helps wit
 
 ## Quick start
 
+Connect to your fresh VPS and run the script with a single pasted command:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh)
+```
+
+This quick start assumes `bash` and `curl` are available on the server, which is a reasonable default for Ubuntu 24.04 VPS images.
+
+If the script updates the system, asks for a reboot, and you reboot the server, run the same command again after reconnecting. The script will detect the saved state and offer to continue from the step after system update.
+
+## Dry Run
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/4esyn/vps-security-bootstrap/main/setup-vps-security.sh) --dry-run
+```
+
+## Run from a local copy
+
+If you already cloned the repository or copied the script to the server, run:
+
 ```bash
 chmod +x setup-vps-security.sh
 ./setup-vps-security.sh
 ```
 
-## Dry run
+Dry-run from a local copy:
 
 ```bash
 ./setup-vps-security.sh --dry-run
@@ -37,7 +57,7 @@ chmod +x setup-vps-security.sh
 - Detects whether a reboot is recommended and asks before restarting the server.
 - Optionally changes the `root` password when launched with root access.
 - Creates or reuses a non-root admin user and ensures sudo access.
-- Configures SSH using a dedicated drop-in file in `/etc/ssh/sshd_config.d/`.
+- Configures SSH directly in `/etc/ssh/sshd_config` and syncs password auth in `/etc/ssh/sshd_config.d/50-cloud-init.conf` when present.
 - Supports either key-only SSH access or keeping password authentication enabled.
 - Configures UFW with a safe order for SSH port changes.
 - Installs and configures Fail2Ban with a local config file.
@@ -46,7 +66,7 @@ chmod +x setup-vps-security.sh
 ## What the script changes
 
 - Installs packages when needed: `openssh-server`, `ufw`, `fail2ban`.
-- Writes SSH settings to `/etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf`.
+- Writes SSH settings to `/etc/ssh/sshd_config`.
 - Writes Fail2Ban settings to `/etc/fail2ban/jail.local`.
 - Creates timestamped backups before overwriting known config files.
 - Creates `~/.ssh/authorized_keys` for the selected admin user when key-based SSH is chosen.
