@@ -5,6 +5,11 @@ set -o pipefail
 
 SCRIPT_VERSION="0.1.0"
 SCRIPT_NAME="vps-security-bootstrap"
+STATE_DIR="/var/lib/vps-security-bootstrap"
+STATE_FILE="${STATE_DIR}/state.env"
+SSH_MAIN_CONFIG="/etc/ssh/sshd_config"
+SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
+SSH_DROPIN_FILE="${SSH_DROPIN_DIR}/99-vps-security-bootstrap.conf"
 LANGUAGE="en"
 DRY_RUN=0
 SUDO_BIN=""
@@ -19,16 +24,17 @@ FAIL2BAN_ENABLED=0
 ROOT_LOGIN_POLICY="no"
 PASSWORD_AUTH_POLICY="no"
 REBOOT_REQUIRED=0
+UPDATE_COMPLETED=0
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 if [[ -t 1 ]]; then
   C_RESET="$(printf '\033[0m')"
   C_BOLD="$(printf '\033[1m')"
-  C_BLUE="$(printf '\033[34m')"
-  C_GREEN="$(printf '\033[32m')"
-  C_YELLOW="$(printf '\033[33m')"
-  C_RED="$(printf '\033[31m')"
-  C_CYAN="$(printf '\033[36m')"
+  C_BLUE="$(printf '\033[94m')"
+  C_GREEN="$(printf '\033[92m')"
+  C_YELLOW="$(printf '\033[93m')"
+  C_RED="$(printf '\033[91m')"
+  C_CYAN="$(printf '\033[96m')"
 else
   C_RESET=""
   C_BOLD=""
@@ -77,6 +83,8 @@ txt() {
     en:update_explain) echo "The script will run apt update and apt upgrade -y." ;;
     en:update_now) echo "Run system updates now?" ;;
     en:update_done) echo "System update finished." ;;
+    en:update_skip_resume) echo "System update was already completed before reboot. Skipping this step." ;;
+    en:reboot_later_notice) echo "A reboot will be recommended later. The script will ask about it at the end." ;;
     en:root_password_section) echo "Root password" ;;
     en:root_password_prompt) echo "Change the root password now?" ;;
     en:root_password_skip) echo "Root password step skipped." ;;
@@ -87,10 +95,13 @@ txt() {
     en:user_created) echo "User created and added to sudo group." ;;
     en:user_sudo_ensured) echo "Sudo group membership confirmed." ;;
     en:user_missing_warn) echo "No non-root admin user is set. SSH hardening options will be limited." ;;
+    en:user_name_invalid) echo "Invalid username. Use lowercase letters, digits, underscores, or hyphens, and start with a letter or underscore." ;;
+    en:user_create_failed) echo "User creation failed. Please try another username or fix the issue and retry." ;;
+    en:user_sudo_failed) echo "Failed to grant sudo access to that user." ;;
     en:ssh_section) echo "SSH hardening" ;;
     en:ssh_prompt) echo "Configure SSH security settings?" ;;
-    en:ssh_port_prompt) echo "Enter the SSH port" ;;
-    en:ssh_port_invalid) echo "Invalid port. Falling back to 22." ;;
+    en:ssh_port_prompt) echo "Enter the SSH port (1024-65535)" ;;
+    en:ssh_port_invalid) echo "Invalid port. Use a value from 1024 to 65535. Falling back to 22." ;;
     en:ssh_change_port) echo "Use a custom SSH port instead of 22?" ;;
     en:ssh_auth_choice) echo "Choose SSH authentication mode:" ;;
     en:ssh_auth_keys) echo "Public key only (recommended)" ;;
@@ -100,6 +111,8 @@ txt() {
     en:ssh_target_prompt) echo "Enter the existing non-root user that should receive SSH access" ;;
     en:ssh_target_missing) echo "That user does not exist. SSH configuration will be skipped for now." ;;
     en:ssh_backup_done) echo "SSH config backup created." ;;
+    en:ssh_dropin_written) echo "SSH settings were written to /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf. The main /etc/ssh/sshd_config file remains unchanged." ;;
+    en:ssh_include_added) echo "Added Include directive to /etc/ssh/sshd_config so drop-in SSH settings are loaded." ;;
     en:ssh_validate) echo "Validating SSH configuration..." ;;
     en:ssh_invalid) echo "SSH validation failed. The new config was not applied." ;;
     en:ssh_restarted) echo "SSH service restarted successfully." ;;
@@ -113,10 +126,18 @@ txt() {
     en:fail2ban_section) echo "Fail2Ban" ;;
     en:fail2ban_prompt) echo "Install and configure Fail2Ban?" ;;
     en:fail2ban_done) echo "Fail2Ban is installed and configured." ;;
+    en:fail2ban_invalid) echo "Fail2Ban configuration check failed. The new config was not applied cleanly." ;;
+    en:fail2ban_validate) echo "Validating Fail2Ban configuration..." ;;
+    en:fail2ban_status) echo "Checking Fail2Ban SSH jail status..." ;;
     en:reboot_section) echo "Reboot" ;;
     en:reboot_needed) echo "A reboot is recommended because the system reports pending restart-required changes." ;;
     en:reboot_prompt) echo "Reboot now?" ;;
     en:reboot_later) echo "Reboot skipped. Remember to restart the server later." ;;
+    en:resume_found) echo "An unfinished setup after reboot was found." ;;
+    en:resume_prompt) echo "Continue setup from the step after system update?" ;;
+    en:resume_continue) echo "Resuming setup from the post-update step." ;;
+    en:resume_reset) echo "Saved post-reboot state cleared. Starting from the beginning." ;;
+    en:resume_invalid) echo "Saved post-reboot state is invalid or outdated. Starting from the beginning." ;;
     en:summary_title) echo "Summary" ;;
     en:summary_user) echo "Admin user" ;;
     en:summary_ssh_port) echo "SSH port" ;;
@@ -130,6 +151,7 @@ txt() {
     en:summary_enabled) echo "enabled" ;;
     en:summary_disabled) echo "disabled / unchanged" ;;
     en:summary_command) echo "Next SSH command" ;;
+    en:summary_ssh_config) echo "SSH config file" ;;
     en:summary_test) echo "Open a new terminal and verify SSH access before closing the current session." ;;
     en:summary_finish) echo "Setup finished." ;;
     en:confirm_yes_default) echo "[Y/n]" ;;
@@ -154,6 +176,8 @@ txt() {
     ru:update_explain) echo "Скрипт выполнит apt update и apt upgrade -y." ;;
     ru:update_now) echo "Запустить обновление системы сейчас?" ;;
     ru:update_done) echo "Обновление системы завершено." ;;
+    ru:update_skip_resume) echo "Обновление системы уже было выполнено до перезагрузки. Этот шаг будет пропущен." ;;
+    ru:reboot_later_notice) echo "Перезагрузка потребуется позже. Скрипт задаст этот вопрос в конце." ;;
     ru:root_password_section) echo "Пароль root" ;;
     ru:root_password_prompt) echo "Сменить пароль root сейчас?" ;;
     ru:root_password_skip) echo "Шаг со сменой пароля root пропущен." ;;
@@ -164,10 +188,13 @@ txt() {
     ru:user_created) echo "Пользователь создан и добавлен в группу sudo." ;;
     ru:user_sudo_ensured) echo "Права sudo подтверждены." ;;
     ru:user_missing_warn) echo "Не задан админ-пользователь без root. Возможности безопасной настройки SSH будут ограничены." ;;
+    ru:user_name_invalid) echo "Некорректное имя пользователя. Используйте строчные буквы, цифры, подчеркивание или дефис; имя должно начинаться с буквы или подчеркивания." ;;
+    ru:user_create_failed) echo "Не удалось создать пользователя. Попробуйте другое имя или исправьте проблему и повторите попытку." ;;
+    ru:user_sudo_failed) echo "Не удалось выдать этому пользователю права sudo." ;;
     ru:ssh_section) echo "Защита SSH" ;;
     ru:ssh_prompt) echo "Настроить параметры безопасности SSH?" ;;
-    ru:ssh_port_prompt) echo "Введите порт SSH" ;;
-    ru:ssh_port_invalid) echo "Некорректный порт. Будет использован 22." ;;
+    ru:ssh_port_prompt) echo "Введите порт SSH (1024-65535)" ;;
+    ru:ssh_port_invalid) echo "Некорректный порт. Используйте значение от 1024 до 65535. Будет использован 22." ;;
     ru:ssh_change_port) echo "Использовать нестандартный SSH-порт вместо 22?" ;;
     ru:ssh_auth_choice) echo "Выберите режим аутентификации SSH:" ;;
     ru:ssh_auth_keys) echo "Только публичный ключ (рекомендуется)" ;;
@@ -177,6 +204,8 @@ txt() {
     ru:ssh_target_prompt) echo "Введите существующего пользователя без root, которому нужен SSH-доступ" ;;
     ru:ssh_target_missing) echo "Такой пользователь не существует. Настройка SSH пока будет пропущена." ;;
     ru:ssh_backup_done) echo "Создана резервная копия SSH-конфига." ;;
+    ru:ssh_dropin_written) echo "SSH-настройки записаны в /etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf. Основной файл /etc/ssh/sshd_config при этом не меняется." ;;
+    ru:ssh_include_added) echo "В /etc/ssh/sshd_config добавлена директива Include, чтобы drop-in SSH-настройки точно загружались." ;;
     ru:ssh_validate) echo "Проверяю SSH-конфиг..." ;;
     ru:ssh_invalid) echo "Проверка SSH не прошла. Новый конфиг не применен." ;;
     ru:ssh_restarted) echo "Сервис SSH успешно перезапущен." ;;
@@ -190,10 +219,18 @@ txt() {
     ru:fail2ban_section) echo "Fail2Ban" ;;
     ru:fail2ban_prompt) echo "Установить и настроить Fail2Ban?" ;;
     ru:fail2ban_done) echo "Fail2Ban установлен и настроен." ;;
+    ru:fail2ban_invalid) echo "Проверка конфигурации Fail2Ban не прошла. Новый конфиг применить корректно не удалось." ;;
+    ru:fail2ban_validate) echo "Проверяю конфигурацию Fail2Ban..." ;;
+    ru:fail2ban_status) echo "Проверяю статус SSH-джейла Fail2Ban..." ;;
     ru:reboot_section) echo "Перезагрузка" ;;
     ru:reboot_needed) echo "Рекомендуется перезагрузка: система сообщает о необходимости рестарта." ;;
     ru:reboot_prompt) echo "Перезагрузить сервер сейчас?" ;;
     ru:reboot_later) echo "Перезагрузка пропущена. Не забудьте перезапустить сервер позже." ;;
+    ru:resume_found) echo "Обнаружено незавершенное выполнение после перезагрузки." ;;
+    ru:resume_prompt) echo "Продолжить настройку с шага после обновления системы?" ;;
+    ru:resume_continue) echo "Продолжаю настройку с шага после обновления." ;;
+    ru:resume_reset) echo "Сохраненное состояние после перезагрузки очищено. Запускаю сценарий с начала." ;;
+    ru:resume_invalid) echo "Сохраненное состояние после перезагрузки повреждено или устарело. Запускаю сценарий с начала." ;;
     ru:summary_title) echo "Итог" ;;
     ru:summary_user) echo "Админ-пользователь" ;;
     ru:summary_ssh_port) echo "Порт SSH" ;;
@@ -207,6 +244,7 @@ txt() {
     ru:summary_enabled) echo "включено" ;;
     ru:summary_disabled) echo "выключено / без изменений" ;;
     ru:summary_command) echo "Команда для нового SSH-подключения" ;;
+    ru:summary_ssh_config) echo "Файл SSH-конфига" ;;
     ru:summary_test) echo "Откройте новый терминал и проверьте вход по SSH, прежде чем закрывать текущую сессию." ;;
     ru:summary_finish) echo "Настройка завершена." ;;
     ru:confirm_yes_default) echo "[Y/n]" ;;
@@ -370,14 +408,43 @@ update_system() {
   print_title "$(txt update_section)"
   msg info "i" "$(txt update_explain)"
 
+  if [[ "$UPDATE_COMPLETED" -eq 1 ]]; then
+    msg info "i" "$(txt update_skip_resume)"
+    detect_reboot_requirement
+    if [[ "$REBOOT_REQUIRED" -eq 1 ]]; then
+      msg warn "!" "$(txt reboot_later_notice)"
+    fi
+    return 0
+  fi
+
   if confirm "$(txt update_now)" "yes"; then
     run_root_cmd apt-get update
     run_root_cmd apt-get upgrade -y
+    UPDATE_COMPLETED=1
     msg success "+" "$(txt update_done)"
   fi
 
-  if [[ -f /var/run/reboot-required ]]; then
+  detect_reboot_requirement
+  if [[ "$REBOOT_REQUIRED" -eq 1 ]]; then
+    msg warn "!" "$(txt reboot_later_notice)"
+  fi
+}
+
+detect_reboot_requirement() {
+  if [[ -f /var/run/reboot-required || -f /run/reboot-required ]]; then
     REBOOT_REQUIRED=1
+    return 0
+  fi
+
+  if ! command -v needrestart >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local needrestart_output=""
+  if needrestart_output="$(needrestart -b 2>/dev/null)"; then
+    if printf "%s\n" "$needrestart_output" | grep -Eq 'NEEDRESTART-KSTA: [23]'; then
+      REBOOT_REQUIRED=1
+    fi
   fi
 }
 
@@ -398,35 +465,57 @@ maybe_change_root_password() {
   fi
 }
 
+validate_username() {
+  local user_name="$1"
+  [[ "$user_name" =~ ^[a-z_][a-z0-9_-]*\$?$ ]]
+}
+
 setup_admin_user() {
   print_title "$(txt user_section)"
   if ! confirm "$(txt user_create_prompt)" "yes"; then
     return 0
   fi
 
-  local user_name
-  user_name="$(prompt_input "$(txt user_name_prompt)")"
+  local user_name=""
 
-  if [[ -z "$user_name" ]]; then
-    msg warn "!" "$(txt user_missing_warn)"
-    return 0
-  fi
+  while true; do
+    user_name="$(prompt_input "$(txt user_name_prompt)")"
 
-  TARGET_USER="$user_name"
-
-  if id "$TARGET_USER" >/dev/null 2>&1; then
-    msg warn "!" "$(txt user_exists)"
-  else
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-      msg warn "$(txt skip_dry_run)" "adduser $TARGET_USER"
-    else
-      run_root_cmd adduser "$TARGET_USER"
+    if [[ -z "$user_name" ]]; then
+      msg warn "!" "$(txt user_missing_warn)"
+      return 0
     fi
-    msg success "+" "$(txt user_created)"
-  fi
 
-  run_root_cmd usermod -aG sudo "$TARGET_USER"
-  msg success "+" "$(txt user_sudo_ensured)"
+    TARGET_USER="$user_name"
+
+    if id "$TARGET_USER" >/dev/null 2>&1; then
+      msg warn "!" "$(txt user_exists)"
+    else
+      if ! validate_username "$TARGET_USER"; then
+        msg warn "!" "$(txt user_name_invalid)"
+        continue
+      fi
+
+      if [[ "$DRY_RUN" -eq 1 ]]; then
+        msg warn "$(txt skip_dry_run)" "adduser $TARGET_USER"
+      else
+        if ! run_root_cmd adduser "$TARGET_USER"; then
+          msg error "!" "$(txt user_create_failed)"
+          TARGET_USER=""
+          continue
+        fi
+      fi
+      msg success "+" "$(txt user_created)"
+    fi
+
+    if run_root_cmd usermod -aG sudo "$TARGET_USER"; then
+      msg success "+" "$(txt user_sudo_ensured)"
+      return 0
+    fi
+
+    msg error "!" "$(txt user_sudo_failed)"
+    TARGET_USER=""
+  done
 }
 
 pick_existing_target_user_if_needed() {
@@ -450,7 +539,7 @@ pick_existing_target_user_if_needed() {
 
 validate_port() {
   local port="$1"
-  if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+  if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 )); then
     printf "%s" "$port"
   else
     msg warn "!" "$(txt ssh_port_invalid)"
@@ -471,6 +560,111 @@ write_file_as_root() {
     printf "%s" "$content" | "$SUDO_BIN" tee "$target_file" >/dev/null
   else
     printf "%s" "$content" >"$target_file"
+  fi
+}
+
+save_resume_state() {
+  local stage="$1"
+  local state_content=""
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+
+  state_content=$(
+    cat <<EOF
+SCRIPT_VERSION=$SCRIPT_VERSION
+LANGUAGE=$LANGUAGE
+CURRENT_STAGE=$stage
+UPDATE_COMPLETED=$UPDATE_COMPLETED
+CREATED_AT=$TIMESTAMP
+EOF
+  )
+
+  run_root_cmd mkdir -p "$STATE_DIR"
+  write_file_as_root "$STATE_FILE" "$state_content"
+}
+
+clear_resume_state() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+
+  if [[ -e "$STATE_FILE" ]]; then
+    run_root_cmd rm -f "$STATE_FILE"
+  fi
+}
+
+ensure_ssh_include() {
+  local include_line="Include ${SSH_DROPIN_DIR}/*.conf"
+
+  if grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf([[:space:]]+.*)?$' "$SSH_MAIN_CONFIG"; then
+    return 0
+  fi
+
+  backup_file "$SSH_MAIN_CONFIG"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "append '$include_line' to $SSH_MAIN_CONFIG"
+    return 0
+  fi
+
+  if [[ -n "$SUDO_BIN" ]]; then
+    printf "\n%s\n" "$include_line" | "$SUDO_BIN" tee -a "$SSH_MAIN_CONFIG" >/dev/null
+  else
+    printf "\n%s\n" "$include_line" >>"$SSH_MAIN_CONFIG"
+  fi
+  msg success "+" "$(txt ssh_include_added)"
+}
+
+load_resume_state() {
+  local state_key=""
+  local state_value=""
+  local state_script_version=""
+  local state_stage=""
+  local state_update_completed="0"
+
+  if [[ ! -r "$STATE_FILE" ]]; then
+    return 1
+  fi
+
+  while IFS='=' read -r state_key state_value; do
+    case "$state_key" in
+      SCRIPT_VERSION) state_script_version="$state_value" ;;
+      CURRENT_STAGE) state_stage="$state_value" ;;
+      UPDATE_COMPLETED) state_update_completed="$state_value" ;;
+    esac
+  done <"$STATE_FILE"
+
+  if [[ "$state_script_version" != "$SCRIPT_VERSION" ]]; then
+    return 1
+  fi
+
+  if [[ "$state_stage" != "post_update_reboot" || "$state_update_completed" != "1" ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+check_resume_state() {
+  if [[ "$DRY_RUN" -eq 1 || ! -e "$STATE_FILE" ]]; then
+    return 0
+  fi
+
+  if ! load_resume_state; then
+    msg warn "!" "$(txt resume_invalid)"
+    clear_resume_state
+    return 0
+  fi
+
+  msg warn "!" "$(txt resume_found)"
+  if confirm "$(txt resume_prompt)" "yes"; then
+    UPDATE_COMPLETED=1
+    msg info "i" "$(txt resume_continue)"
+    msg info "i" "$(txt update_skip_resume)"
+  else
+    clear_resume_state
+    msg info "i" "$(txt resume_reset)"
   fi
 }
 
@@ -540,7 +734,6 @@ configure_ssh() {
     fi
   fi
 
-  local ssh_dropin="/etc/ssh/sshd_config.d/99-vps-security-bootstrap.conf"
   local ssh_content
   ssh_content=$(
     cat <<EOF
@@ -555,9 +748,12 @@ UsePAM yes
 EOF
   )
 
-  backup_file "$ssh_dropin"
-  write_file_as_root "$ssh_dropin" "$ssh_content"
+  run_root_cmd install -d -m 755 "$SSH_DROPIN_DIR"
+  ensure_ssh_include
+  backup_file "$SSH_DROPIN_FILE"
+  write_file_as_root "$SSH_DROPIN_FILE" "$ssh_content"
   msg success "+" "$(txt ssh_backup_done)"
+  msg info "i" "$(txt ssh_dropin_written)"
 
   msg info "i" "$(txt ssh_validate)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -593,6 +789,7 @@ configure_ufw() {
   run_root_cmd ufw default deny incoming
   run_root_cmd ufw default allow outgoing
   run_root_cmd ufw allow "${SSH_PORT}/tcp" comment "SSH"
+  run_root_cmd ufw allow 443/tcp comment "HTTPS"
 
   if [[ "$SSH_PORT" != "22" ]] && confirm "$(txt ufw_remove_old)" "no"; then
     REMOVE_OLD_SSH_RULE=1
@@ -633,17 +830,54 @@ bantime = 2h
 findtime = 30m
 maxretry = 4
 backend = systemd
+usedns = no
 
 [sshd]
 enabled = true
+filter = sshd
+mode = normal
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
 port = $SSH_PORT
 EOF
   )
 
   backup_file "$jail_local"
   write_file_as_root "$jail_local" "$jail_content"
+  msg info "i" "$(txt fail2ban_validate)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "fail2ban-client -d"
+  else
+    if [[ -n "$SUDO_BIN" ]]; then
+      if ! "$SUDO_BIN" fail2ban-client -d >/dev/null; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    else
+      if ! fail2ban-client -d >/dev/null; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    fi
+  fi
   run_root_cmd systemctl enable --now fail2ban
   run_root_cmd systemctl restart fail2ban
+  msg info "i" "$(txt fail2ban_status)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "fail2ban-client status sshd"
+  else
+    if [[ -n "$SUDO_BIN" ]]; then
+      if ! "$SUDO_BIN" fail2ban-client status sshd; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    else
+      if ! fail2ban-client status sshd; then
+        msg error "!" "$(txt fail2ban_invalid)"
+        return 1
+      fi
+    fi
+  fi
   FAIL2BAN_ENABLED=1
   msg success "+" "$(txt fail2ban_done)"
 }
@@ -656,6 +890,7 @@ maybe_reboot() {
   print_title "$(txt reboot_section)"
   msg warn "!" "$(txt reboot_needed)"
   if confirm "$(txt reboot_prompt)" "no"; then
+    save_resume_state "post_update_reboot"
     run_root_cmd reboot
   else
     msg warn "!" "$(txt reboot_later)"
@@ -691,6 +926,9 @@ print_summary() {
   fi
   printf "%s: %s\n" "$(txt summary_ufw)" "$(bool_label "$UFW_ENABLED")"
   printf "%s: %s\n" "$(txt summary_fail2ban)" "$(bool_label "$FAIL2BAN_ENABLED")"
+  if [[ "$SSH_CONFIGURED" -eq 1 ]]; then
+    printf "%s: %s\n" "$(txt summary_ssh_config)" "$SSH_DROPIN_FILE"
+  fi
   printf "%s: ssh -p %s %s@YOUR_SERVER_IP\n" "$(txt summary_command)" "$SSH_PORT" "${TARGET_USER:-${CURRENT_USER}}"
   printf "%s\n" "$(txt summary_test)"
   msg success "+" "$(txt summary_finish)"
@@ -707,6 +945,7 @@ main() {
   msg info "i" "$(txt checking_env)"
   require_root_or_sudo
   check_os
+  check_resume_state
   msg success "+" "$(txt env_ok)"
 
   update_system
@@ -716,6 +955,7 @@ main() {
   configure_ufw
   configure_fail2ban
   print_summary
+  clear_resume_state
   maybe_reboot
 }
 
