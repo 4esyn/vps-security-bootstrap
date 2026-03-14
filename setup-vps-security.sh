@@ -653,6 +653,17 @@ set_sshd_option() {
   fi
 }
 
+restore_backup_if_present() {
+  local target_file="$1"
+  local backup_file_path="$2"
+
+  if [[ -z "$backup_file_path" || ! -e "$backup_file_path" ]]; then
+    return 0
+  fi
+
+  run_root_cmd cp "$backup_file_path" "$target_file"
+}
+
 load_resume_state() {
   local state_key=""
   local state_value=""
@@ -731,6 +742,8 @@ configure_ssh() {
   local auth_choice
   auth_choice="$(prompt_input "$(txt choice_prompt)" "1")"
   local public_key=""
+  local main_backup="${SSH_MAIN_CONFIG}.bak.${TIMESTAMP}"
+  local cloud_backup="${SSH_CLOUD_INIT_FILE}.bak.${TIMESTAMP}"
 
   if [[ "$auth_choice" == "2" ]]; then
     SSH_MODE="password"
@@ -781,7 +794,6 @@ configure_ssh() {
   set_sshd_option "$SSH_MAIN_CONFIG" "ChallengeResponseAuthentication" "no"
   set_sshd_option "$SSH_MAIN_CONFIG" "UsePAM" "yes"
   msg success "+" "$(txt ssh_backup_done)"
-  msg info "i" "$(txt ssh_dropin_written)"
 
   run_root_cmd install -d -m 755 "$SSH_DROPIN_DIR"
   if [[ -f "$SSH_CLOUD_INIT_FILE" || "$DRY_RUN" -eq 1 ]]; then
@@ -793,6 +805,30 @@ configure_ssh() {
     msg info "i" "$(txt ssh_cloud_init_updated)"
   fi
 
+  msg info "i" "$(txt ssh_main_written)"
+
+  msg info "i" "$(txt ssh_validate)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "sshd -t"
+  else
+    run_root_cmd install -d -m 755 /run/sshd
+    if [[ -n "$SUDO_BIN" ]]; then
+      if ! "$SUDO_BIN" sshd -t; then
+        restore_backup_if_present "$SSH_MAIN_CONFIG" "$main_backup"
+        restore_backup_if_present "$SSH_CLOUD_INIT_FILE" "$cloud_backup"
+        msg error "!" "$(txt ssh_invalid)"
+        return 1
+      fi
+    else
+      if ! sshd -t; then
+        restore_backup_if_present "$SSH_MAIN_CONFIG" "$main_backup"
+        restore_backup_if_present "$SSH_CLOUD_INIT_FILE" "$cloud_backup"
+        msg error "!" "$(txt ssh_invalid)"
+        return 1
+      fi
+    fi
+  fi
+
   if [[ -e "$SSH_DROPIN_FILE" ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
       msg warn "$(txt skip_dry_run)" "rm -f $SSH_DROPIN_FILE"
@@ -800,25 +836,6 @@ configure_ssh() {
       run_root_cmd rm -f "$SSH_DROPIN_FILE"
     fi
     msg info "i" "$(txt ssh_dropin_removed)"
-  fi
-
-  msg info "i" "$(txt ssh_main_written)"
-
-  msg info "i" "$(txt ssh_validate)"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    msg warn "$(txt skip_dry_run)" "sshd -t"
-  else
-    if [[ -n "$SUDO_BIN" ]]; then
-      if ! "$SUDO_BIN" sshd -t; then
-        msg error "!" "$(txt ssh_invalid)"
-        return 1
-      fi
-    else
-      if ! sshd -t; then
-        msg error "!" "$(txt ssh_invalid)"
-        return 1
-      fi
-    fi
   fi
 
   run_root_cmd service ssh restart
