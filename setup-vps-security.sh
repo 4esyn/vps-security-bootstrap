@@ -118,6 +118,7 @@ txt() {
     en:ssh_validate) echo "Validating SSH configuration..." ;;
     en:ssh_invalid) echo "SSH validation failed. The new config was not applied." ;;
     en:ssh_restarted) echo "SSH service restarted successfully." ;;
+    en:ssh_socket_restarted) echo "SSH socket was restarted so the new port is actually applied on socket-activated systems." ;;
     en:ssh_skip) echo "SSH configuration skipped." ;;
     en:ufw_section) echo "Firewall (UFW)" ;;
     en:ufw_prompt) echo "Configure UFW firewall now?" ;;
@@ -212,6 +213,7 @@ txt() {
     ru:ssh_validate) echo "Проверяю SSH-конфиг..." ;;
     ru:ssh_invalid) echo "Проверка SSH не прошла. Новый конфиг не применен." ;;
     ru:ssh_restarted) echo "Сервис SSH успешно перезапущен." ;;
+    ru:ssh_socket_restarted) echo "SSH-сокет перезапущен, чтобы новый порт реально применился в системах с socket activation." ;;
     ru:ssh_skip) echo "Настройка SSH пропущена." ;;
     ru:ufw_section) echo "Firewall (UFW)" ;;
     ru:ufw_prompt) echo "Настроить UFW сейчас?" ;;
@@ -664,6 +666,23 @@ restore_backup_if_present() {
   run_root_cmd cp "$backup_file_path" "$target_file"
 }
 
+restart_ssh_service() {
+  run_root_cmd service ssh restart
+  msg success "+" "$(txt ssh_restarted)"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "systemctl restart ssh.socket"
+    return 0
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet ssh.socket; then
+      run_root_cmd systemctl restart ssh.socket
+      msg info "i" "$(txt ssh_socket_restarted)"
+    fi
+  fi
+}
+
 load_resume_state() {
   local state_key=""
   local state_value=""
@@ -838,8 +857,7 @@ configure_ssh() {
     msg info "i" "$(txt ssh_dropin_removed)"
   fi
 
-  run_root_cmd service ssh restart
-  msg success "+" "$(txt ssh_restarted)"
+  restart_ssh_service
   SSH_CONFIGURED=1
 }
 
