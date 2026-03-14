@@ -11,6 +11,7 @@ SSH_MAIN_CONFIG="/etc/ssh/sshd_config"
 SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSH_DROPIN_FILE="${SSH_DROPIN_DIR}/99-vps-security-bootstrap.conf"
 SSH_CLOUD_INIT_FILE="${SSH_DROPIN_DIR}/50-cloud-init.conf"
+FAIL2BAN_LOCAL_FILE="/etc/fail2ban/fail2ban.local"
 LANGUAGE="en"
 DRY_RUN=0
 SUDO_BIN=""
@@ -911,7 +912,9 @@ configure_fail2ban() {
 
   ensure_package "fail2ban"
   local jail_local="/etc/fail2ban/jail.local"
+  local fail2ban_local="$FAIL2BAN_LOCAL_FILE"
   local jail_content
+  local fail2ban_local_content
   jail_content=$(
     cat <<EOF
 [DEFAULT]
@@ -919,7 +922,6 @@ bantime = 2h
 findtime = 30m
 maxretry = 4
 backend = systemd
-allowipv6 = auto
 usedns = no
 
 [sshd]
@@ -931,8 +933,16 @@ journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
 port = $SSH_PORT
 EOF
   )
+  fail2ban_local_content=$(
+    cat <<EOF
+[Definition]
+allowipv6 = auto
+EOF
+  )
 
   backup_file "$jail_local"
+  backup_file "$fail2ban_local"
+  write_file_as_root "$fail2ban_local" "$fail2ban_local_content"
   write_file_as_root "$jail_local" "$jail_content"
   msg info "i" "$(txt fail2ban_validate)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
