@@ -821,7 +821,7 @@ configure_ssh() {
     fi
   fi
 
-  run_root_cmd systemctl restart ssh
+  run_root_cmd service ssh restart
   msg success "+" "$(txt ssh_restarted)"
   SSH_CONFIGURED=1
 }
