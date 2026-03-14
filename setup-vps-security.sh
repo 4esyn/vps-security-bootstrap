@@ -12,6 +12,7 @@ SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSH_DROPIN_FILE="${SSH_DROPIN_DIR}/99-vps-security-bootstrap.conf"
 SSH_CLOUD_INIT_FILE="${SSH_DROPIN_DIR}/50-cloud-init.conf"
 FAIL2BAN_LOCAL_FILE="/etc/fail2ban/fail2ban.local"
+BBR_SYSCTL_FILE="/etc/sysctl.d/60-bbr.conf"
 LANGUAGE="en"
 DRY_RUN=0
 SUDO_BIN=""
@@ -23,6 +24,7 @@ SSH_CONFIGURED=0
 REMOVE_OLD_SSH_RULE=0
 UFW_ENABLED=0
 FAIL2BAN_ENABLED=0
+BBR_ENABLED=0
 ROOT_LOGIN_POLICY="no"
 PASSWORD_AUTH_POLICY="no"
 REBOOT_REQUIRED=0
@@ -133,6 +135,12 @@ txt() {
     en:fail2ban_invalid) echo "Fail2Ban configuration check failed. The new config was not applied cleanly." ;;
     en:fail2ban_validate) echo "Validating Fail2Ban configuration..." ;;
     en:fail2ban_status) echo "Checking Fail2Ban SSH jail status..." ;;
+    en:bbr_section) echo "TCP BBR" ;;
+    en:bbr_prompt) echo "Enable TCP BBR and fq for outbound TCP traffic?" ;;
+    en:bbr_explain) echo "This can improve throughput and latency for some network workloads, but it is optional and mainly affects the server's outgoing TCP traffic." ;;
+    en:bbr_unavailable) echo "BBR is not available in this kernel. Skipping this step." ;;
+    en:bbr_done) echo "TCP BBR and fq were enabled." ;;
+    en:bbr_invalid) echo "Failed to apply the TCP BBR sysctl configuration." ;;
     en:reboot_section) echo "Reboot" ;;
     en:reboot_needed) echo "A reboot is recommended because the system reports pending restart-required changes." ;;
     en:reboot_prompt) echo "Reboot now?" ;;
@@ -152,6 +160,7 @@ txt() {
     en:summary_password_auth) echo "Password authentication" ;;
     en:summary_ufw) echo "UFW" ;;
     en:summary_fail2ban) echo "Fail2Ban" ;;
+    en:summary_bbr) echo "TCP BBR" ;;
     en:summary_enabled) echo "enabled" ;;
     en:summary_disabled) echo "disabled / unchanged" ;;
     en:summary_command) echo "Next SSH command" ;;
@@ -228,6 +237,12 @@ txt() {
     ru:fail2ban_invalid) echo "Проверка конфигурации Fail2Ban не прошла. Новый конфиг применить корректно не удалось." ;;
     ru:fail2ban_validate) echo "Проверяю конфигурацию Fail2Ban..." ;;
     ru:fail2ban_status) echo "Проверяю статус SSH-джейла Fail2Ban..." ;;
+    ru:bbr_section) echo "TCP BBR" ;;
+    ru:bbr_prompt) echo "Включить TCP BBR и fq для исходящего TCP-трафика сервера?" ;;
+    ru:bbr_explain) echo "Это может улучшить пропускную способность и задержки для части сетевых сценариев, но шаг необязательный и влияет в основном на исходящий TCP-трафик сервера." ;;
+    ru:bbr_unavailable) echo "В этом ядре BBR недоступен. Шаг будет пропущен." ;;
+    ru:bbr_done) echo "TCP BBR и fq включены." ;;
+    ru:bbr_invalid) echo "Не удалось применить sysctl-настройку для TCP BBR." ;;
     ru:reboot_section) echo "Перезагрузка" ;;
     ru:reboot_needed) echo "Рекомендуется перезагрузка: система сообщает о необходимости рестарта." ;;
     ru:reboot_prompt) echo "Перезагрузить сервер сейчас?" ;;
@@ -247,6 +262,7 @@ txt() {
     ru:summary_password_auth) echo "Аутентификация по паролю" ;;
     ru:summary_ufw) echo "UFW" ;;
     ru:summary_fail2ban) echo "Fail2Ban" ;;
+    ru:summary_bbr) echo "TCP BBR" ;;
     ru:summary_enabled) echo "включено" ;;
     ru:summary_disabled) echo "выключено / без изменений" ;;
     ru:summary_command) echo "Команда для нового SSH-подключения" ;;
@@ -987,6 +1003,61 @@ EOF
   msg success "+" "$(txt fail2ban_done)"
 }
 
+configure_bbr() {
+  print_title "$(txt bbr_section)"
+  msg info "i" "$(txt bbr_explain)"
+
+  if ! confirm "$(txt bbr_prompt)" "no"; then
+    return 0
+  fi
+
+  local available_cc=""
+  local bbr_content=""
+  bbr_content=$(
+    cat <<EOF
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+  )
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "sysctl net.ipv4.tcp_available_congestion_control"
+  else
+    if [[ -n "$SUDO_BIN" ]]; then
+      available_cc="$("$SUDO_BIN" sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+    else
+      available_cc="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ "$DRY_RUN" -ne 1 ]] && [[ ! " $available_cc " =~ [[:space:]]bbr[[:space:]] ]]; then
+    msg warn "!" "$(txt bbr_unavailable)"
+    return 0
+  fi
+
+  backup_file "$BBR_SYSCTL_FILE"
+  write_file_as_root "$BBR_SYSCTL_FILE" "$bbr_content"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    msg warn "$(txt skip_dry_run)" "sysctl --system"
+  else
+    if [[ -n "$SUDO_BIN" ]]; then
+      if ! "$SUDO_BIN" sysctl --system >/dev/null; then
+        msg error "!" "$(txt bbr_invalid)"
+        return 1
+      fi
+    else
+      if ! sysctl --system >/dev/null; then
+        msg error "!" "$(txt bbr_invalid)"
+        return 1
+      fi
+    fi
+  fi
+
+  BBR_ENABLED=1
+  msg success "+" "$(txt bbr_done)"
+}
+
 maybe_reboot() {
   if [[ "$REBOOT_REQUIRED" -ne 1 ]]; then
     return 0
@@ -1031,6 +1102,7 @@ print_summary() {
   fi
   printf "%s: %s\n" "$(txt summary_ufw)" "$(bool_label "$UFW_ENABLED")"
   printf "%s: %s\n" "$(txt summary_fail2ban)" "$(bool_label "$FAIL2BAN_ENABLED")"
+  printf "%s: %s\n" "$(txt summary_bbr)" "$(bool_label "$BBR_ENABLED")"
   if [[ "$SSH_CONFIGURED" -eq 1 ]]; then
     printf "%s: %s\n" "$(txt summary_ssh_config)" "$SSH_MAIN_CONFIG"
   fi
@@ -1059,6 +1131,7 @@ main() {
   configure_ssh
   configure_ufw
   configure_fail2ban
+  configure_bbr
   print_summary
   clear_resume_state
   maybe_reboot

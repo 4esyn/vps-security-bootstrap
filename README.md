@@ -6,7 +6,7 @@ A simple interactive Bash script for basic VPS security setup.
 
 Right now this script is made for Ubuntu 24.04 LTS.
 
-It starts with a language choice (`English / Русский`) and then helps with updates, sudo user setup, SSH hardening, UFW, and optional Fail2Ban installation.
+It starts with a language choice (`English / Русский`) and then helps with updates, sudo user setup, SSH hardening, UFW, optional Fail2Ban installation, and an optional TCP BBR step.
 
 ## What it can do
 
@@ -16,6 +16,7 @@ It starts with a language choice (`English / Русский`) and then helps wit
 - change the SSH port
 - set up UFW
 - install and configure Fail2Ban
+- optionally enable TCP BBR and `fq` for outbound TCP traffic
 - show a final summary with the SSH command you should test
 
 ## Quick start
@@ -61,6 +62,7 @@ Dry-run from a local copy:
 - Supports either key-only SSH access or keeping password authentication enabled.
 - Configures UFW with a safe order for SSH port changes.
 - Installs and configures Fail2Ban with a local config file.
+- Optionally enables TCP BBR by writing a dedicated sysctl file in `/etc/sysctl.d/`.
 - Prints a final summary with the connection command to test in a new terminal.
 
 ## What the script changes
@@ -68,6 +70,7 @@ Dry-run from a local copy:
 - Installs packages when needed: `openssh-server`, `ufw`, `fail2ban`.
 - Writes SSH settings to `/etc/ssh/sshd_config`.
 - Writes Fail2Ban settings to `/etc/fail2ban/jail.local`.
+- Optionally writes TCP BBR settings to `/etc/sysctl.d/60-bbr.conf`.
 - Creates timestamped backups before overwriting known config files.
 - Creates `~/.ssh/authorized_keys` for the selected admin user when key-based SSH is chosen.
 
@@ -80,6 +83,7 @@ Dry-run from a local copy:
 - Whether to configure SSH, change the SSH port, and use key-only or password-enabled auth.
 - Whether to configure UFW now.
 - Whether to install and configure Fail2Ban.
+- Whether to enable TCP BBR and `fq` for outbound TCP traffic.
 - Whether to reboot if the system reports that a reboot is recommended.
 
 ## Safety notes
